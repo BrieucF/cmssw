@@ -31,9 +31,11 @@
 
 #include "DQM/DTMonitorModule/interface/DTTrigGeomUtils.h"
 
-//RPC TP                                                                                                                                                                                                                                       
+//RPC TP
 #include "DataFormats/RPCRecHit/interface/RPCRecHitCollection.h"
-#include <DataFormats/MuonDetId/interface/RPCDetId.h>
+#include "DataFormats/MuonDetId/interface/RPCDetId.h"
+#include "Geometry/RPCGeometry/interface/RPCGeometry.h"
+#include "Geometry/RPCGeometry/interface/RPCGeomServ.h"
 
 
 
@@ -106,6 +108,7 @@ class DTTrigPhase2Prod: public edm::EDProducer{
     void endRun(edm::Run const& iRun, const edm::EventSetup& iEventSetup) override;
     
     edm::ESHandle<DTGeometry> dtGeo;
+    edm::ESHandle<RPCGeometry> rpcGeo;
 
     //plots
     TFile * theFileOut;
@@ -210,6 +213,7 @@ class DTTrigPhase2Prod: public edm::EDProducer{
 
     DTTrigGeomUtils *trigGeomUtils;
 
+
  private:
     // Trigger Configuration Manager CCB validity flag
     bool my_CCBValid;
@@ -229,6 +233,10 @@ class DTTrigPhase2Prod: public edm::EDProducer{
     bool do_correlation;
     int p2_df;
     bool filter_primos;
+
+    //RPC
+    bool useRPC;
+    GlobalPoint getRPCGlobalPosition(RPCDetId rpcId, const RPCRecHit& rpcIt) const;
 
     // txt ttrig flag
     bool txt_ttrig_bc0;

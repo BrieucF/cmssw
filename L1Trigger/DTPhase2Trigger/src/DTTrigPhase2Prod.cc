@@ -27,6 +27,7 @@
 #include "CalibMuon/DTDigiSync/interface/DTTTrigBaseSync.h"
 #include "CalibMuon/DTDigiSync/interface/DTTTrigSyncFactory.h"
 
+
 #include <iostream>
 #include "TFile.h"
 #include "TH1F.h"
@@ -109,6 +110,7 @@ DTTrigPhase2Prod::DTTrigPhase2Prod(const ParameterSet& pset):
     dtDigisToken = consumes< DTDigiCollection >(pset.getParameter<edm::InputTag>("digiTag"));
 
     rpcRecHitsLabel = consumes<RPCRecHitCollection>(pset.getUntrackedParameter < edm::InputTag > ("rpcRecHits"));
+    useRPC = pset.getUntrackedParameter<bool>("useRPC");
   
     
     // Choosing grouping scheme:
@@ -441,6 +443,9 @@ void DTTrigPhase2Prod::beginRun(edm::Run const& iRun, const edm::EventSetup& iEv
   
   ESHandle< DTConfigManager > dtConfig ;
   iEventSetup.get< DTConfigManagerRcd >().get( dtConfig );
+  
+  if(debug) std::cout<<"getting RPC geometry"<<std::endl;
+  iEventSetup.get<MuonGeometryRecord>().get(rpcGeo);
 
   grouping_obj->initialise(iEventSetup); // Grouping object initialisation
   
@@ -575,7 +580,7 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
     
 	int primo_index=0;
 	bool oneof4=false;
-	//    for (auto metaPrimitiveIt = metaPrimitives.begin(); metaPrimitiveIt != metaPrimitives.end(); ++metaPrimitiveIt){
+	//for (auto metaPrimitiveIt = metaPrimitives.begin(); metaPrimitiveIt != metaPrimitives.end(); ++metaPrimitiveIt)
 	if(metaPrimitives.size()==1){
 	    if(debug){
 		std::cout<<"filtering:";
@@ -625,7 +630,8 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 		    oneof4=false;
 		}
 	    }
-    }else{
+    }//end of if(filter_primos)
+    else{
 	for (size_t i=0; i<metaPrimitives.size(); i++){ 
 	    if(fabs(metaPrimitives[i].tanPhi)>tanPhiTh) continue;
 	    filteredMetaPrimitives.push_back(metaPrimitives[i]); 
@@ -654,7 +660,7 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 	    if(sectorTP==14) sectorTP=10;
 	    sectorTP=sectorTP-1;
 	  
-	    if(p2_df==0){
+	    if(p2_df==1){
 		outPhi.push_back(L1MuDTChambPhDigi((*metaPrimitiveIt).t0,
 						   slId.wheel(),
 						   sectorTP,
@@ -665,7 +671,7 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 						   1,
 						   0
 						   ));
-	    }else if(p2_df==1){
+	    }else if(p2_df==2){
 		if(debug)std::cout<<"pushing back phase-2 dataformat agreement with Oscar for comparison with slice test"<<std::endl;
 		outP2.push_back(L1MuDTChambDigi((int)round((*metaPrimitiveIt).t0/25.),   // ubx (m_bx) //bx en la orbita
 						slId.wheel(),   // uwh (m_wheel)     
@@ -699,24 +705,25 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 	    }  
 	}		
 
-	if(p2_df==0){
+	if(p2_df==1){
 	    std::unique_ptr<L1MuDTChambPhContainer> resultPhi (new L1MuDTChambPhContainer);
 	    resultPhi->setContainer(outPhi); iEvent.put(std::move(resultPhi));
 	    outPhi.clear();
 	    outPhi.erase(outPhi.begin(),outPhi.end());
-	}else if(p2_df==1){
+	}else if(p2_df==2){
 	    std::unique_ptr<L1MuDTChambContainer> resultP2 (new L1MuDTChambContainer);
 	    resultP2->setContainer(outP2); iEvent.put(std::move(resultP2));
 	    outP2.clear();
 	    outP2.erase(outP2.begin(),outP2.end());
-	}else if(p2_df==2){
+	}else if(p2_df==3){
 	    std::unique_ptr<L1Phase2MuDTPhContainer> resultP2Ph (new L1Phase2MuDTPhContainer);
 	    resultP2Ph->setContainer(outP2Ph); iEvent.put(std::move(resultP2Ph));
 	    outP2Ph.clear();
 	    outP2Ph.erase(outP2Ph.begin(),outP2Ph.end());
 	}
 	    
-    }else{
+    }// end of if(!do_correlation)
+    else{
 	//Silvia's code for correlationg filteredMetaPrimitives
 	
 	if(debug) std::cout<<"starting correlation"<<std::endl;
@@ -1018,6 +1025,83 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 	vector<L1MuDTChambPhDigi> outPhiCH;
 	vector<L1MuDTChambDigi> outP2CH;
 	vector<L1Phase2MuDTPhDigi> outP2PhCH;
+
+    if(useRPC){
+        for (RPCRecHitCollection::const_iterator rpcIt = rpcHits->begin(); rpcIt != rpcHits->end(); rpcIt++) {
+            // Retrieve RPC info and translate it to DT convention if needed
+            int rpc_bx = rpcIt->BunchX(); // FIXME how to get bx w.r.t. orbit start?
+            int rpc_time = int(rpcIt->time());//FIXME need to follow DT convention
+            RPCDetId rpcDetId = (RPCDetId)(*rpcIt).rpcId();
+            if(debug) std::cout << "Getting RPC info from : " << rpcDetId << std::endl;
+            int rpc_region = rpcDetId.region();
+            if(rpc_region != 0 ) continue; //Region = 0 Barrel
+            int rpc_wheel = rpcDetId.ring(); // In barrel, wheel is accessed via ring() method ([-2,+2])
+            int rpc_dt_sector = rpcDetId.sector()-1; // DT sector:[0,11] while RPC sector:[1,12] 
+            int rpc_station = rpcDetId.station();
+
+            if(debug) std::cout << "Getting RPC global point and translating to DT local coordinates" << std::endl;
+            GlobalPoint rpc_gp = getRPCGlobalPosition(rpcDetId, *rpcIt);
+            int rpc_global_phi = rpc_gp.phi();
+            int rpc_localDT_phi = std::numeric_limits<int>::min();
+            // FIXME Adaptation of L1Trigger/L1TTwinMux/src/RPCtoDTTranslator.cc radialAngle function, should be updated
+            if (rpcDetId.sector() == 1) rpc_localDT_phi = int(rpc_global_phi * 1024);
+            else {
+                if (rpc_global_phi >= 0) rpc_localDT_phi = int((rpc_localDT_phi - rpc_dt_sector * Geom::pi() / 6.) * 1024);
+                else rpc_localDT_phi = int((rpc_global_phi + (13 - rpcDetId.sector()) * Geom::pi() / 6.) * 1024);
+            }
+            int rpc_phiB = std::numeric_limits<int>::min(); // single hit has no phiB and 0 is legal value for DT phiB
+            int rpc_quality = -1; // to be decided
+            int rpc_index = 0;
+            int rpc_BxCnt = 0;
+            int rpc_flag = 3; // single hit
+            if(p2_df == 1){
+		        if(debug)std::cout<<"pushing back phase-1 dataformat"<<std::endl;
+                outPhiCH.push_back(L1MuDTChambPhDigi(rpc_bx,
+                            rpc_wheel,
+                            rpc_dt_sector,
+                            rpc_station,
+                            rpc_localDT_phi,
+                            rpc_phiB,
+                            rpc_quality,
+                            rpc_index,
+                            rpc_BxCnt,
+                            rpc_flag
+                            ));
+            }
+            else if(p2_df == 2){
+		        if(debug)std::cout<<"pushing back phase-2 dataformat agreement with Oscar for comparison with slice test"<<std::endl;
+                outP2CH.push_back(L1MuDTChambDigi(rpc_bx,
+                            rpc_wheel,
+                            rpc_dt_sector,
+                            rpc_station,
+                            rpc_localDT_phi,
+                            rpc_phiB,
+                            0,
+                            0,
+                            rpc_quality,
+                            rpc_index,
+                            rpc_time,
+                            -1, // signle hit --> no chi2
+                            rpc_flag
+                            ));
+            }
+            else if(p2_df == 3){
+                if(debug)std::cout<<"pushing back phase-2 dataformat carlo-federica dataformat"<<std::endl;
+                outP2PhCH.push_back(L1Phase2MuDTPhDigi(rpc_bx,
+                            rpc_wheel,
+                            rpc_dt_sector,
+                            rpc_station,
+                            rpc_localDT_phi,
+                            rpc_phiB,
+                            rpc_quality,
+                            rpc_index,
+                            rpc_time,
+                            -1, // signle hit --> no chi2
+                            rpc_flag
+                            ));
+            }
+        }
+    }
 	
 	for (auto metaPrimitiveIt = correlatedMetaPrimitives.begin(); metaPrimitiveIt != correlatedMetaPrimitives.end(); ++metaPrimitiveIt){
 	    DTChamberId chId((*metaPrimitiveIt).rawId);
@@ -1058,9 +1142,9 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 	    }
 
 	    
-	    if(p2_df==0){
+	    if(p2_df==1){
 		outPhiCH.push_back(thisTP);
-	    }else if(p2_df==1){
+	    }else if(p2_df==2){
 		if(debug)std::cout<<"pushing back slice-test dataformat"<<std::endl;
 		
 		outP2CH.push_back(L1MuDTChambDigi((int)round((*metaPrimitiveIt).t0/25.),
@@ -1077,7 +1161,7 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 						  (int)round((*metaPrimitiveIt).chi2),
 						  -10
 						  ));
-	    }else if(p2_df==2){
+	    }else if(p2_df==3){
 		if(debug)std::cout<<"pushing back carlo-federica dataformat"<<std::endl;
 		
 		outP2PhCH.push_back(L1Phase2MuDTPhDigi((int)round((*metaPrimitiveIt).t0/25.),
@@ -1096,17 +1180,17 @@ void DTTrigPhase2Prod::produce(Event & iEvent, const EventSetup& iEventSetup){
 	    }
 	}
 
-	if(p2_df==0){ 
+	if(p2_df==1){ 
 	    std::unique_ptr<L1MuDTChambPhContainer> resultPhiCH (new L1MuDTChambPhContainer);
 	    resultPhiCH->setContainer(outPhiCH); iEvent.put(std::move(resultPhiCH));
 	    outPhiCH.clear();
 	    outPhiCH.erase(outPhiCH.begin(),outPhiCH.end());
-	}else if(p2_df==1){
+	}else if(p2_df==2){
 	    std::unique_ptr<L1MuDTChambContainer> resultP2CH (new L1MuDTChambContainer);
 	    resultP2CH->setContainer(outP2CH); iEvent.put(std::move(resultP2CH));
 	    outP2CH.clear();
 	    outP2CH.erase(outP2CH.begin(),outP2CH.end());
-	}else if(p2_df==2){
+	}else if(p2_df==3){
 	    std::unique_ptr<L1Phase2MuDTPhContainer> resultP2PhCH (new L1Phase2MuDTPhContainer);
 	    resultP2PhCH->setContainer(outP2PhCH); iEvent.put(std::move(resultP2PhCH));
 	    outP2PhCH.clear();
@@ -2736,4 +2820,12 @@ int DTTrigPhase2Prod::compute_pathId(MuonPath *mPath) {
     return -1;
 }
 
+GlobalPoint DTTrigPhase2Prod::getRPCGlobalPosition(RPCDetId rpcId, const RPCRecHit& rpcIt) const{
 
+  RPCDetId rpcid = RPCDetId(rpcId);
+  const LocalPoint& rpc_lp = rpcIt.localPosition();
+  const GlobalPoint& rpc_gp = rpcGeo->idToDet(rpcid)->surface().toGlobal(rpc_lp);
+
+  return rpc_gp;
+
+}
